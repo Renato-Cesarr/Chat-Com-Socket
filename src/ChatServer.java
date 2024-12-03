@@ -3,73 +3,88 @@ import java.net.*;
 import java.util.*;
 
 public class ChatServer {
-    private static final int PORT = 12346;
-    private static Map<String, PrintWriter> clientMap = new HashMap<>(); 
+    private static final int PORTA = 12346;
+    private static final Map<String, PrintWriter> clientesConectados = new HashMap<>();
 
     public static void main(String[] args) {
-        System.out.println("Servidor de chat iniciado...");
-        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
+        System.out.println("Servidor de chat iniciado na porta " + PORTA);
+
+        try (ServerSocket servidorSocket = new ServerSocket(PORTA)) {
             while (true) {
-                new ClientHandler(serverSocket.accept()).start();
+                Socket socketCliente = servidorSocket.accept();
+                new GerenciadorDeCliente(socketCliente).start();
             }
         } catch (IOException e) {
             System.err.println("Erro no servidor: " + e.getMessage());
         }
     }
 
-    private static class ClientHandler extends Thread {
-        private Socket socket;
-        private PrintWriter out;
-        private String clientName;
+    private static class GerenciadorDeCliente extends Thread {
+        private final Socket socketCliente;
+        private PrintWriter saida;
+        private String nomeCliente;
 
-        public ClientHandler(Socket socket) {
-            this.socket = socket;
+        public GerenciadorDeCliente(Socket socketCliente) {
+            this.socketCliente = socketCliente;
         }
 
+        @Override
         public void run() {
-            try (
-                InputStreamReader isr = new InputStreamReader(socket.getInputStream());
-                BufferedReader in = new BufferedReader(isr);
-            ) {
-                out = new PrintWriter(socket.getOutputStream(), true);
-
-                out.println("Digite seu nome:");
-                clientName = in.readLine();
-                if (clientName == null || clientName.isEmpty()) {
-                    clientName = "Anônimo";
-                }
-
-                synchronized (clientMap) {
-                    clientMap.put(clientName, out);
-                }
-
-                broadcastMessage("Servidor", clientName + " entrou no chat!");
-
-                String message;
-                while ((message = in.readLine()) != null) {
-                    broadcastMessage(clientName, message);
-                }
+            try {
+                configurarConexao();
+                processarMensagens();
             } catch (IOException e) {
-                System.err.println("Erro no cliente: " + e.getMessage());
+                System.err.println("Erro na conexão com cliente: " + e.getMessage());
             } finally {
-                if (clientName != null) {
-                    synchronized (clientMap) {
-                        clientMap.remove(clientName);
-                    }
-                    broadcastMessage("Servidor", clientName + " saiu do chat.");
-                }
-                try {
-                    socket.close();
-                } catch (IOException e) {
-                    System.err.println("Erro ao fechar o socket: " + e.getMessage());
-                }
+                finalizarConexao();
             }
         }
 
-        private void broadcastMessage(String sender, String message) {
-            synchronized (clientMap) {
-                for (PrintWriter writer : clientMap.values()) {
-                    writer.println(sender + ": " + message);
+        private void configurarConexao() throws IOException {
+            BufferedReader leitor = new BufferedReader(new InputStreamReader(socketCliente.getInputStream()));
+            saida = new PrintWriter(socketCliente.getOutputStream(), true);
+
+            saida.println("Digite seu nome:");
+            nomeCliente = leitor.readLine();
+            if (nomeCliente == null || nomeCliente.isBlank()) {
+                nomeCliente = "Anônimo";
+            }
+
+            synchronized (clientesConectados) {
+                clientesConectados.put(nomeCliente, saida);
+            }
+
+            enviarMensagemParaTodos("Servidor", nomeCliente + " entrou no chat!");
+        }
+
+        private void processarMensagens() throws IOException {
+            BufferedReader leitor = new BufferedReader(new InputStreamReader(socketCliente.getInputStream()));
+
+            String mensagem;
+            while ((mensagem = leitor.readLine()) != null) {
+                enviarMensagemParaTodos(nomeCliente, mensagem);
+            }
+        }
+
+        private void finalizarConexao() {
+            if (nomeCliente != null) {
+                synchronized (clientesConectados) {
+                    clientesConectados.remove(nomeCliente);
+                }
+                enviarMensagemParaTodos("Servidor", nomeCliente + " saiu do chat.");
+            }
+
+            try {
+                socketCliente.close();
+            } catch (IOException e) {
+                System.err.println("Erro ao fechar conexão com cliente: " + e.getMessage());
+            }
+        }
+
+        private void enviarMensagemParaTodos(String remetente, String mensagem) {
+            synchronized (clientesConectados) {
+                for (PrintWriter escritor : clientesConectados.values()) {
+                    escritor.println(remetente + ": " + mensagem);
                 }
             }
         }
